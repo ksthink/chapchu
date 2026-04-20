@@ -864,6 +864,7 @@ class GameScene extends Phaser.Scene {
       if (!this.holdActive) this.holdActive = [null, null];
       this.holdActive[note.lane] = note;
       note.lastHoldSfx = this.songTime;
+      note.lastHoldCombo = this.songTime;
       this.hitCount++;
       this.combo++;
       if (this.combo > this.maxCombo) this.maxCombo = this.combo;
@@ -1088,6 +1089,8 @@ class GameScene extends Phaser.Scene {
 
     // 홀드 중인 레인은 효과음을 일정 간격으로 반복 재생
     const HOLD_SFX_INTERVAL = 0.12; // 초
+    // 홀드 중에는 0.2초마다 콤보 +1
+    const HOLD_COMBO_INTERVAL = 0.2; // 초
     if (this.holdActive) {
       for (let lane = 0; lane < 2; lane++) {
         const hn = this.holdActive[lane];
@@ -1095,6 +1098,17 @@ class GameScene extends Phaser.Scene {
         if (this.songTime - (hn.lastHoldSfx || 0) >= HOLD_SFX_INTERVAL) {
           this._playLaneSfx(lane);
           hn.lastHoldSfx = this.songTime;
+        }
+        // 홀드가 종료되기 전까지만 콤보 누적 (종료 직전 0.2초는 _completeHold가 처리)
+        while (
+          this.songTime - (hn.lastHoldCombo || 0) >= HOLD_COMBO_INTERVAL &&
+          this.songTime + HOLD_COMBO_INTERVAL < hn.holdEndTime
+        ) {
+          hn.lastHoldCombo = (hn.lastHoldCombo || 0) + HOLD_COMBO_INTERVAL;
+          this.combo++;
+          if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+          this.score += 20 + this.combo * 2;
+          this._updateHUD();
         }
       }
     }
