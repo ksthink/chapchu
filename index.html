@@ -146,7 +146,22 @@ function buildSongData(seedIn) {
     if (prev && prev.lane === n.lane && Math.abs(prev.hitTime - n.hitTime) < 0.18) continue;
     cleaned.push(n);
   }
-  return cleaned;
+
+  // 홀드 구간(같은 레인) 안에 끼어든 일반 노트 제거
+  // 머리 시점은 허용, 그 이후 ~ 꼬리 + 약간의 여유까지의 같은 레인 노트는 삭제
+  const HOLD_PAD = 0.08; // 꼬리 직후 여유 (s)
+  const holds = cleaned.filter(n => n.holdDuration);
+  const filtered = cleaned.filter(n => {
+    for (const h of holds) {
+      if (n === h) return true;
+      if (n.lane !== h.lane) continue;
+      const start = h.hitTime + 0.001;
+      const end   = h.hitTime + h.holdDuration + HOLD_PAD;
+      if (n.hitTime > start && n.hitTime < end) return false;
+    }
+    return true;
+  });
+  return filtered;
 }
 let songData = buildSongData();
 
