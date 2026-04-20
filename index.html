@@ -43,6 +43,8 @@
 </head>
 <body>
 <div id="game-container"></div>
+<!-- iOS 무음 스위치 시에도 WebAudio 재생을 허용하도록 미디어 세션 전환용 무음 keepalive -->
+<audio id="__silent_keepalive" loop playsinline webkit-playsinline preload="auto" src="silent.mp3"></audio>
 <div class="__font-preload">챱츄르냥이 0123456789 눌러서 시작 콤보 완벽 굿 좋아 실패 경기 종료 다시 하기 최고 정확도 RPM 제작자 송죽동길냥</div>
 <script>
 // 첫 사용자 제스처에서 즉시 오디오 언락 (iOS Safari 대응)
@@ -57,6 +59,16 @@ function _earlyUnlock() {
     src.buffer = buf;
     src.connect(ctx.destination);
     src.start(0);
+  } catch (e) {}
+  // iOS 무음 스위치가 켜져있어도 WebAudio를 들리게 하기 위해
+  // HTML <audio> 요소를 한 번 재생해 "미디어 재생" 세션으로 전환
+  try {
+    const ka = document.getElementById('__silent_keepalive');
+    if (ka && ka.paused) {
+      ka.volume = 0.001;
+      const p = ka.play();
+      if (p && p.catch) p.catch(() => {});
+    }
   } catch (e) {}
   window.removeEventListener('touchstart', _earlyUnlock, true);
   window.removeEventListener('mousedown',  _earlyUnlock, true);
@@ -303,6 +315,15 @@ function unlockAudio() {
     src.buffer = buf;
     src.connect(ctx.destination);
     src.start(0);
+    // iOS 무음 스위치 우회: <audio> 요소 재생해 미디어 세션으로 전환
+    try {
+      const ka = document.getElementById('__silent_keepalive');
+      if (ka && ka.paused) {
+        ka.volume = 0.001;
+        const p = ka.play();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) {}
     audioUnlocked = true;
   } catch (e) {}
 }
