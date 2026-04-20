@@ -837,7 +837,16 @@ class GameScene extends Phaser.Scene {
       if (d < bestD) { bestD = d; best = n; }
     }
     if (best && bestD <= HIT_WIN_MS) this._onHit(best, bestD);
-    else { playSfx('miao'); this._showFB(lane, '실패', C.FB_MISS); }
+    else {
+      playSfx('miao');
+      this._showFB(lane, '실패', C.FB_MISS);
+      // 잘못된 입력은 콤보를 끊는다
+      if (this.combo > 0) {
+        this.combo = 0;
+        this._updateHUD();
+        this.cameras.main.shake(80, 0.003);
+      }
+    }
   }
 
   // 키를 뗌 때 — 홀드 종료 판정
