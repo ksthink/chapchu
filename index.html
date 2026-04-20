@@ -1041,6 +1041,13 @@ class GameScene extends Phaser.Scene {
     window.addEventListener('keydown', () => this.scene.restart(), { once: true });
   }
 
+  // 진행도(0~1)에 따라 컨베이어 벨트 속도를 점진적으로 증가
+  // 시작 100% → 곡 끝 150% (최대 +50%)
+  _currentSpeed() {
+    const progress = Phaser.Math.Clamp((this.songTime || 0) / SONG_DURATION, 0, 1);
+    return NOTE_SPEED * (1 + 0.5 * progress);
+  }
+
   // ─── 메인 루프 ────────────────────────────────
   update() {
     if (!this.gameRunning) return;
@@ -1050,7 +1057,8 @@ class GameScene extends Phaser.Scene {
     } else {
       this.songTime = (performance.now() - this.gameStartAt) / 1000;
     }
-    const travelSec = (this.hitY + NOTE_R) / NOTE_SPEED;
+    const speed = this._currentSpeed();
+    const travelSec = (this.hitY + NOTE_R) / speed;
 
     // 홀드 중인 레인은 효과음을 일정 간격으로 반복 재생
     const HOLD_SFX_INTERVAL = 0.12; // 초
@@ -1094,7 +1102,7 @@ class GameScene extends Phaser.Scene {
     const toMiss = [];
     for (const n of this.notes) {
       if (!n.active) continue;
-      const headY = this.hitY - (n.hitTime - this.songTime) * NOTE_SPEED;
+      const headY = this.hitY - (n.hitTime - this.songTime) * speed;
       if (n.holding) {
         // 머리는 판정선에 고정, tail/bar만 내려온다
         n.sp.setPosition(this.laneX[n.lane], this.hitY);
@@ -1103,7 +1111,7 @@ class GameScene extends Phaser.Scene {
       }
 
       if (n.isHold) {
-        const tailY = this.hitY - (n.holdEndTime - this.songTime) * NOTE_SPEED;
+        const tailY = this.hitY - (n.holdEndTime - this.songTime) * speed;
         n.tail.setPosition(this.laneX[n.lane], tailY);
         // bar: head와 tail 사이 (head가 아래, tail이 위)
         const headRefY = n.holding ? this.hitY : headY;
@@ -1120,7 +1128,7 @@ class GameScene extends Phaser.Scene {
       }
 
       // 미스 판정: 홀드가 아닌 머리가 판정선을 너무 많이 지나면
-      if (!n.holding && headY > this.hitY + NOTE_R + (HIT_WIN_MS / 1000) * NOTE_SPEED) {
+      if (!n.holding && headY > this.hitY + NOTE_R + (HIT_WIN_MS / 1000) * speed) {
         toMiss.push(n);
       }
       // 홀드 자동 종료: 누르고 있는 중 tail이 판정선을 널은 후 손 안 뗄 경우 → 성공으로 간주
