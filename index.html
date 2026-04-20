@@ -437,6 +437,8 @@ class GameScene extends Phaser.Scene {
     songData = buildSongData();
     this.totalNotes  = songData.length;
     this.gameRunning = false;
+    this.gameOver    = false;
+    this._restartReadyAt = 0;
     this.songTime    = 0;
     this.gameStartAt = 0;
     this.notes        = [];
@@ -483,6 +485,10 @@ class GameScene extends Phaser.Scene {
       if (e.repeat) return;
       unlockAudio();
       this._pressOn(lane);
+      if (this.gameOver) {
+        if (this.time.now >= (this._restartReadyAt || 0)) this.scene.restart();
+        return;
+      }
       if (!this.gameRunning) { this._startGame(); return; }
       this._judgeInput(lane);
     };
@@ -812,6 +818,10 @@ class GameScene extends Phaser.Scene {
     if (!this._pointerLane) this._pointerLane = {};
     this._pointerLane[ptr.id] = lane;
     this._pressOn(lane);
+    if (this.gameOver) {
+      if (this.time.now >= (this._restartReadyAt || 0)) this.scene.restart();
+      return;
+    }
     if (!this.gameRunning) { this._startGame(); return; }
     this._judgeInput(lane);
   }
@@ -1067,6 +1077,9 @@ class GameScene extends Phaser.Scene {
   // ─── 결과 화면 ────────────────────────────────
   _endGame() {
     this.gameRunning = false;
+    this.gameOver = true;
+    // 마지막 노트 입력으로 즉시 재시작되지 않도록 짧은 잠금
+    this._restartReadyAt = this.time.now + 500;
     stopBgm();
     const W = this.W, H = this.H;
     const acc = Math.round((this.hitCount / this.totalNotes) * 100);
@@ -1092,9 +1105,6 @@ class GameScene extends Phaser.Scene {
 
     const retryTxt = this.add.text(W / 2, H / 2 + 160, '▶ 다시 하기 ◀', han('22px', '#ffffff')).setOrigin(0.5);
     this.tweens.add({ targets: retryTxt, alpha: 0.2, duration: 600, yoyo: true, repeat: -1, ease: 'Linear' });
-
-    this.input.once('pointerdown', () => this.scene.restart());
-    window.addEventListener('keydown', () => this.scene.restart(), { once: true });
   }
 
   // 진행도(0~1)에 따라 컨베이어 벨트 속도를 점진적으로 증가
