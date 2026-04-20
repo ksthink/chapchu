@@ -61,7 +61,7 @@ window.addEventListener('keydown',    _earlyUnlock, true);
 // ═══════════════════════════════════════════════
 //  SONG DATA  (1분 길이, 점진적 난이도)
 // ═══════════════════════════════════════════════
-const SONG_DURATION = 60; // 초
+const SONG_DURATION = 40; // 초
 function buildSongData(seedIn) {
   const notes = [];
   const BPM = 100;
@@ -74,35 +74,35 @@ function buildSongData(seedIn) {
     return seed / 233280;
   };
 
-  // 섹션 구성 (매우 완만 → 올라갈수로 조금씩 추가):
-  // 0~12s : intro   - 4분음만, 단순 교차 (완전 씀게)
-  // 12~28s: verse   - 4분음 아래, 가끔 쉬쟁
-  // 28~44s: chorus  - 8분음 섞임, 드문다 동시 노트
-  // 44~56s: build   - 8분음 위주 + 틀린 패턴
-  // 56~60s: outro   - 4분음으로 정리
+  // 섹션 구성 (40초, 매우 완만 → 올라갈수로 조금씩 추가):
+  // 0~9s  : intro   - 4분음만, 단순 교차 (완전 씀게)
+  // 9~19s : verse   - 4분음 아래, 가끔 쉬쟁
+  // 19~29s: chorus  - 8분음 섞임, 드문다 동시 노트
+  // 29~37s: build   - 8분음 위주 + 틀린 패턴
+  // 37~40s: outro   - 4분음으로 정리
   const start = 3.0;
   let t = start;
   let lane = 0;
 
   // intro — 4분음 교차
-  for (; t < 12; t += beat) {
+  for (; t < 9; t += beat) {
     notes.push({ lane, hitTime: t });
     lane ^= 1;
   }
 
   // verse — 4분음, 가끔 다음 차례 skip + 홀드 도입
-  for (; t < 28; t += beat) {
+  for (; t < 19; t += beat) {
     if (rand() < 0.85) notes.push({ lane, hitTime: t });
     if (rand() < 0.4) lane ^= 1;
     // verse 중반 이후 가끔 짧은 홀드(2박)
-    if (t > 16 && rand() < 0.18) {
+    if (t > 13 && rand() < 0.18) {
       notes.push({ lane: lane ^ 1, hitTime: t + beat / 2, holdDuration: beat * 2 });
       t += beat * 2;
     }
   }
 
   // chorus — 8분음 일부 섞기 + 홀드 노트 등장
-  for (; t < 44; t += beat) {
+  for (; t < 29; t += beat) {
     notes.push({ lane, hitTime: t });
     // 가끔 8분 추가
     if (rand() < 0.45) {
@@ -119,7 +119,7 @@ function buildSongData(seedIn) {
   }
 
   // build — 8분음 위주, 홀드 노트 증가
-  for (; t < 56; t += beat / 2) {
+  for (; t < 37; t += beat / 2) {
     notes.push({ lane, hitTime: t });
     if (rand() < 0.5) lane ^= 1;
     // 드문 동시
