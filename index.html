@@ -911,7 +911,7 @@ class GameScene extends Phaser.Scene {
       this.holdActive[note.lane] = note;
       note.lastHoldSfx = this.songTime;
       note.lastHoldCombo = this.songTime;
-      this.hitCount++;
+      // 홈드 노트는 꼬리 성공(_completeHold) 시에만 hitCount에 포함한다
       this.combo++;
       if (this.combo > this.maxCombo) this.maxCombo = this.combo;
 
@@ -1087,7 +1087,7 @@ class GameScene extends Phaser.Scene {
     this._restartReadyAt = this.time.now + 500;
     stopBgm();
     const W = this.W, H = this.H;
-    const acc = Math.round((this.hitCount / this.totalNotes) * 100);
+    const acc = Math.min(100, Math.round((this.hitCount / Math.max(1, this.totalNotes)) * 100));
     let grade = acc >= 95 ? 'S' : acc >= 85 ? 'A' : acc >= 70 ? 'B' : acc >= 50 ? 'C' : 'D';
     const finalRpm = this._calcRpm();
 
