@@ -935,7 +935,6 @@ class GameScene extends Phaser.Scene {
     this._showFB(note.lane, '놓침', C.FB_MISS);
     this._updateHUD();
     playMiss();
-    playSfx('miao');
     this.cameras.main.shake(120, 0.004);
   }
 
@@ -948,7 +947,6 @@ class GameScene extends Phaser.Scene {
     this._showFB(note.lane, '실패', C.FB_MISS);
     this._updateHUD();
     playMiss();
-    playSfx('miao');
     this.cameras.main.shake(180, 0.006);
     this.cameras.main.flash(120, 255, 255, 255);
   }
