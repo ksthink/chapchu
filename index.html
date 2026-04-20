@@ -1,0 +1,1138 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>챱츄르냥이</title>
+  <link rel="stylesheet" href="https://font.ksthink.com/f/mulmaru.css" />
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <style>
+    /* 게임 시작 전에 폰트 다운로드를 유도하기 위한 숨겨진 프리로드 */
+    .__font-preload {
+      position: absolute; left: -9999px; top: -9999px;
+      font-family: 'mulmaru', sans-serif;
+      visibility: hidden;
+    }
+  </style>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #111;
+      overflow: hidden;
+      touch-action: none;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none;
+      user-select: none;
+      overscroll-behavior: none;
+    }
+    #game-container {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+    }
+    #game-container canvas { display: block; touch-action: none; }
+  </style>
+</head>
+<body>
+<div id="game-container"></div>
+<div class="__font-preload">챱츄르냥이 0123456789 눌러서 시작 콤보 완벽 굿 좋아 실패 경기 종료 다시 하기 최고 정확도 RPM</div>
+<script>
+// 첫 사용자 제스처에서 즉시 오디오 언락 (iOS Safari 대응)
+function _earlyUnlock() {
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!window.__ac) window.__ac = new AC({ latencyHint: 'interactive' });
+    const ctx = window.__ac;
+    ctx.resume();
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+  } catch (e) {}
+  window.removeEventListener('touchstart', _earlyUnlock, true);
+  window.removeEventListener('mousedown',  _earlyUnlock, true);
+  window.removeEventListener('keydown',    _earlyUnlock, true);
+}
+window.addEventListener('touchstart', _earlyUnlock, true);
+window.addEventListener('mousedown',  _earlyUnlock, true);
+window.addEventListener('keydown',    _earlyUnlock, true);
+// ═══════════════════════════════════════════════
+//  SONG DATA  (1분 길이, 점진적 난이도)
+// ═══════════════════════════════════════════════
+const SONG_DURATION = 60; // 초
+function buildSongData(seedIn) {
+  const notes = [];
+  const BPM = 100;
+  const beat = 60 / BPM; // 0.6초 = 4분음
+
+  // 시드 기반 의사난수 (시드 미지정 시 매 플레이 랜덤)
+  let seed = (seedIn != null) ? seedIn : Math.floor(Math.random() * 1e9) + 1;
+  const rand = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+
+  // 섹션 구성 (매우 완만 → 올라갈수로 조금씩 추가):
+  // 0~12s : intro   - 4분음만, 단순 교차 (완전 씀게)
+  // 12~28s: verse   - 4분음 아래, 가끔 쉬쟁
+  // 28~44s: chorus  - 8분음 섞임, 드문다 동시 노트
+  // 44~56s: build   - 8분음 위주 + 틀린 패턴
+  // 56~60s: outro   - 4분음으로 정리
+  const start = 3.0;
+  let t = start;
+  let lane = 0;
+
+  // intro — 4분음 교차
+  for (; t < 12; t += beat) {
+    notes.push({ lane, hitTime: t });
+    lane ^= 1;
+  }
+
+  // verse — 4분음, 가끔 다음 차례 skip + 홀드 도입
+  for (; t < 28; t += beat) {
+    if (rand() < 0.85) notes.push({ lane, hitTime: t });
+    if (rand() < 0.4) lane ^= 1;
+    // verse 중반 이후 가끔 짧은 홀드(2박)
+    if (t > 16 && rand() < 0.18) {
+      notes.push({ lane: lane ^ 1, hitTime: t + beat / 2, holdDuration: beat * 2 });
+      t += beat * 2;
+    }
+  }
+
+  // chorus — 8분음 일부 섞기 + 홀드 노트 등장
+  for (; t < 44; t += beat) {
+    notes.push({ lane, hitTime: t });
+    // 가끔 8분 추가
+    if (rand() < 0.45) {
+      notes.push({ lane: lane ^ 1, hitTime: t + beat / 2 });
+    }
+    // 드문 동시 노트
+    if (rand() < 0.10) notes.push({ lane: lane ^ 1, hitTime: t });
+    // 가끔 긴 홀드 노트 (1박)
+    if (rand() < 0.18) {
+      notes.push({ lane: lane ^ 1, hitTime: t, holdDuration: beat });
+      t += beat; // 홀드 중 겹침 방지
+    }
+    if (rand() < 0.5) lane ^= 1;
+  }
+
+  // build — 8분음 위주, 홀드 노트 증가
+  for (; t < 56; t += beat / 2) {
+    notes.push({ lane, hitTime: t });
+    if (rand() < 0.5) lane ^= 1;
+    // 드문 동시
+    if (rand() < 0.08) notes.push({ lane: lane ^ 1, hitTime: t });
+    // 홀드 노트 (0.5~1.5박)
+    if (rand() < 0.15) {
+      const dur = beat * (0.5 + Math.floor(rand() * 3) * 0.5);
+      notes.push({ lane: lane ^ 1, hitTime: t + beat / 2, holdDuration: dur });
+      t += dur; // 겹침 방지
+    }
+  }
+
+  // outro — 다시 4분음으로 정리
+  for (; t < SONG_DURATION - 0.5; t += beat) {
+    notes.push({ lane, hitTime: t });
+    lane ^= 1;
+  }
+
+  // 정렬 + 너무 가까운 동일 레인 중복 제거
+  notes.sort((a, b) => a.hitTime - b.hitTime || a.lane - b.lane);
+  const cleaned = [];
+  for (const n of notes) {
+    const prev = cleaned[cleaned.length - 1];
+    if (prev && prev.lane === n.lane && Math.abs(prev.hitTime - n.hitTime) < 0.18) continue;
+    cleaned.push(n);
+  }
+  return cleaned;
+}
+let songData = buildSongData();
+
+// ═══════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════
+const GAME_W      = 480;
+const GAME_H      = 854;
+const NOTE_R      = 26;
+const HIT_Y_RATIO = 0.82;
+const NOTE_SPEED  = 280;
+const HIT_WIN_MS  = 180;
+
+// ── 색상 팔레트 (레트로 흑백) ────────────────
+const C = {
+  BG:          0x111111,   // 깊은 회색 배경
+  LANE_BG:     0x1a1a1a,   // 레인 배경
+  LANE_BORDER: 0xeeeeee,   // 레인 테두리 흰색
+  NOTE_FILL:   0xffffff,   // 노트 흰색
+  NOTE_STROKE: 0xffffff,
+  JUDGE_IDLE:  0x555555,   // 판정원 회색
+  JUDGE_HIT:   0xffffff,   // 판정원 히트
+  DIVIDER:     0x333333,
+  HIT_LINE:    0x888888,
+  DOT:         0xffffff,
+  TEXT_SCORE:  '#ffffff',
+  TEXT_COMBO:  '#cccccc',
+  FB_PERFECT:  '#ffffff',
+  FB_GREAT:    '#bbbbbb',
+  FB_GOOD:     '#888888',
+  FB_MISS:     '#555555',
+};
+
+// ═══════════════════════════════════════════════
+//  Web Audio 효과음 (저지연 재생)
+// ═══════════════════════════════════════════════
+let audioCtx = null;
+function getACtx() {
+  if (!audioCtx) {
+    if (window.__ac) {
+      audioCtx = window.__ac;
+    } else {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      try {
+        audioCtx = new AC({ latencyHint: 'interactive', sampleRate: 44100 });
+      } catch (e) {
+        audioCtx = new AC();
+      }
+      window.__ac = audioCtx;
+    }
+  }
+  return audioCtx;
+}
+
+// 디코딩된 효과음 버퍼 (재생 시 BufferSource만 새로 생성)
+const sfxBuffers  = { left: null, right: null, bgm: null, miao: null };
+const sfxReady    = { left: null, right: null, bgm: null, miao: null };
+async function loadSfx(url, key) {
+  const p = (async () => {
+    try {
+      const ctx = getACtx();
+      const res = await fetch(url);
+      const arr = await res.arrayBuffer();
+      sfxBuffers[key] = await ctx.decodeAudioData(arr);
+    } catch (e) { /* 무시 */ }
+  })();
+  sfxReady[key] = p;
+  return p;
+}
+function playSfx(key) {
+  const ctx = getACtx();
+  const buf = sfxBuffers[key];
+  if (!buf) return false;
+  try {
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    return true;
+  } catch (e) { return false; }
+}
+
+// BGM 재생 (제어 가능)
+let bgmSource = null;
+let bgmGain   = null;
+function playBgm(volume = 0.5, loop = true) {
+  const ctx = getACtx();
+  const buf = sfxBuffers.bgm;
+  if (!buf) return null;
+  stopBgm();
+  try {
+    bgmSource = ctx.createBufferSource();
+    bgmSource.buffer = buf;
+    bgmSource.loop   = loop;
+    bgmGain = ctx.createGain();
+    bgmGain.gain.value = volume;
+    bgmSource.connect(bgmGain);
+    bgmGain.connect(ctx.destination);
+    const startAt = ctx.currentTime;
+    bgmSource.start(startAt);
+    return startAt;
+  } catch (e) { return null; }
+}
+function stopBgm() {
+  try { if (bgmSource) bgmSource.stop(); } catch(e) {}
+  bgmSource = null;
+  bgmGain = null;
+}
+
+// iOS / 모바일 Safari 언락: 사용자 제스처 핸들러 안에서 "동기적"으로 호출되어야 함
+let audioUnlocked = false;
+function unlockAudio() {
+  if (audioUnlocked) return;
+  try {
+    const ctx = getACtx();
+    // resume은 promise를 반환하지만, 호출 자체는 제스처 내 실행되어야 함
+    ctx.resume();
+    // 무음 버퍼를 즉시 재생해 iOS 오디오 엔진 잠금 해제
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+    audioUnlocked = true;
+  } catch (e) {}
+}
+function playPop() {
+  try {
+    const ctx = getACtx();
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1047, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(1400, ctx.currentTime + 0.04);
+    gain.gain.setValueAtTime(0.35, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.1);
+    osc.start(); osc.stop(ctx.currentTime + 0.1);
+  } catch(e) {}
+}
+
+// 미스 효과음 (낮은 톤 버즈)
+function playMiss() {
+  try {
+    const ctx = getACtx();
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(180, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.15);
+    gain.gain.setValueAtTime(0.12, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.16);
+    osc.start(); osc.stop(ctx.currentTime + 0.18);
+  } catch(e) {}
+}
+
+// 배경 보선 비트 (킥/스네어 유사 패턴)
+function scheduleBeat(startAt, totalDur) {
+  try {
+    const ctx = getACtx();
+    const BPM = 120;
+    const spb = 60 / BPM;
+    for (let t = 0; t < totalDur; t += spb / 2) {
+      const when = startAt + t;
+      const isDown = Math.round(t / (spb / 2)) % 2 === 0;
+      // 킥(다운비트) / 하이했(업비트)
+      if (isDown) {
+        const o = ctx.createOscillator(); const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = 'sine';
+        o.frequency.setValueAtTime(120, when);
+        o.frequency.exponentialRampToValueAtTime(45, when + 0.14);
+        g.gain.setValueAtTime(0.22, when);
+        g.gain.exponentialRampToValueAtTime(0.001, when + 0.18);
+        o.start(when); o.stop(when + 0.2);
+      } else {
+        // 노이즈 하이했
+        const buf = ctx.createBuffer(1, ctx.sampleRate * 0.06, ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.4;
+        const src = ctx.createBufferSource();
+        const g   = ctx.createGain();
+        src.buffer = buf; src.connect(g); g.connect(ctx.destination);
+        g.gain.setValueAtTime(0.05, when);
+        g.gain.exponentialRampToValueAtTime(0.001, when + 0.06);
+        src.start(when); src.stop(when + 0.08);
+      }
+    }
+  } catch(e) {}
+}
+
+// ═══════════════════════════════════════════════
+//  GameScene
+// ═══════════════════════════════════════════════
+class GameScene extends Phaser.Scene {
+  constructor() { super({ key: 'GameScene' }); }
+
+  // ── Phaser preload: 런타임 텍스처 생성 (픽셀풍 사각형) ──
+  preload() {
+    const S = NOTE_R * 2;
+
+    // 노트 이미지 (fish.png)
+    this.load.image('note', 'fish.png');
+
+    // 판정원 기본: 회색 테두리 사각형
+    const jGfx = this.make.graphics({ x: 0, y: 0, add: false });
+    jGfx.lineStyle(2, C.JUDGE_IDLE, 1);
+    jGfx.strokeRect(1, 1, S, S);
+    jGfx.generateTexture('judge_idle', S + 2, S + 2);
+    jGfx.destroy();
+
+    // 판정원 히트: 흰 테두리 사각형
+    const jhGfx = this.make.graphics({ x: 0, y: 0, add: false });
+    jhGfx.lineStyle(3, C.JUDGE_HIT, 1);
+    jhGfx.strokeRect(1, 1, S, S);
+    jhGfx.generateTexture('judge_hit', S + 2, S + 2);
+    jhGfx.destroy();
+
+    // 파티클: 작은 흰 사각형
+    const starGfx = this.make.graphics({ x: 0, y: 0, add: false });
+    starGfx.fillStyle(0xffffff, 1);
+    starGfx.fillRect(0, 0, 6, 6);
+    starGfx.generateTexture('particle', 6, 6);
+    starGfx.destroy();
+
+    // 레인별 효과음: WebAudio로 사전 디코딩 (저지연)
+    loadSfx('chap.mp3', 'left');
+    loadSfx('chu.mp3',  'right');
+    loadSfx('back.mp3', 'bgm');
+    loadSfx('miao.mp3', 'miao');
+
+    // 하단 캐릭터 이미지
+    this.load.image('char_idle',  '1.png');
+    this.load.image('char_left',  '2.png');
+    this.load.image('char_right', '3.png');
+    this.load.image('heart',      'heart.png');
+  }
+
+  create() {
+    const W = this.scale.width;
+    const H = this.scale.height;
+    this.W = W; this.H = H;
+
+    this.laneX   = [W * 0.3, W * 0.7];
+    this.hitY    = H * HIT_Y_RATIO;
+
+    this.score       = 0;
+    this.combo       = 0;
+    this.maxCombo    = 0;
+    this.hitCount    = 0;
+    // 매 플레이마다 새로운 패턴 생성
+    songData = buildSongData();
+    this.totalNotes  = songData.length;
+    this.gameRunning = false;
+    this.songTime    = 0;
+    this.gameStartAt = 0;
+    this.notes        = [];
+    this.notePool     = [];
+    this.holdActive   = [null, null];
+    this.pendingNotes = songData.map(n => ({...n})).sort((a,b) => a.hitTime - b.hitTime);
+
+    // ── 배경 그라디언트 ──
+    this._drawBg();
+
+    // ── 장식 요소 ──
+    this._drawDecorations();
+
+    // ── 레인 ──
+    this._buildLanes();
+
+    // ── 판정원 (Sprite 사용) ──
+    this.judgeSprites = this.laneX.map(x =>
+      this.add.image(x, this.hitY, 'judge_idle').setOrigin(0.5)
+    );
+
+    // ── HUD ──
+    this._buildHUD();
+
+    // ── 하단 캐릭터 ──
+    this._buildChar();
+
+    // ── 시작 화면 ──
+    this._buildStartScreen();
+
+    // ── 키보드 입력 ──
+    this.input.on('pointerdown', this._onPointer, this);
+    this.input.on('pointerup',   this._onPointerUp, this);
+    this.input.on('pointerupoutside', this._onPointerUp, this);
+
+    // 레인별 사운드는 WebAudio로 직접 재생 (Phaser Sound 사용 안 함)
+
+    // 키보드 입력 (F/← = lane 0, J/→ = lane 1)
+    this._keyDownHandler = (e) => {
+      let lane = -1;
+      if (e.code === 'KeyF' || e.code === 'ArrowLeft')  lane = 0;
+      if (e.code === 'KeyJ' || e.code === 'ArrowRight') lane = 1;
+      if (lane < 0) return;
+      if (e.repeat) return;
+      unlockAudio();
+      this._pressOn(lane);
+      if (!this.gameRunning) { this._startGame(); return; }
+      this._judgeInput(lane);
+    };
+    this._keyUpHandler = (e) => {
+      let lane = -1;
+      if (e.code === 'KeyF' || e.code === 'ArrowLeft')  lane = 0;
+      if (e.code === 'KeyJ' || e.code === 'ArrowRight') lane = 1;
+      if (lane < 0) return;
+      this._pressOff(lane);
+    };
+    window.addEventListener('keydown', this._keyDownHandler);
+    window.addEventListener('keyup',   this._keyUpHandler);
+    const cleanup = () => {
+      window.removeEventListener('keydown', this._keyDownHandler);
+      window.removeEventListener('keyup',   this._keyUpHandler);
+    };
+    this.events.once('shutdown', cleanup);
+    this.events.once('destroy',  cleanup);
+  }
+
+  // ─── 배경 (단색) ──────────────────────────────
+  _drawBg() {
+    const W = this.W, H = this.H;
+    const g = this.add.graphics();
+    g.fillStyle(C.BG, 1);
+    g.fillRect(0, 0, W, H);
+  }
+
+  // ─── 장식 제거 (레트로 단순화) ──────────────
+  _drawDecorations() { /* no-op */ }
+
+  // ─── 레인 ─────────────────────────────────────
+  _buildLanes() {
+    const W = this.W, H = this.H;
+    const g = this.add.graphics();
+    const lw = NOTE_R * 1.9;
+
+    this.laneX.forEach(x => {
+      g.fillStyle(C.LANE_BG, 1);
+      g.fillRect(x - lw, 0, lw * 2, H);
+      g.lineStyle(2, C.LANE_BORDER, 1);
+      g.strokeRect(x - lw, 0, lw * 2, H);
+    });
+
+    // 중앙 점선 구분
+    g.lineStyle(1, C.DIVIDER, 1);
+    for (let y = 0; y < H; y += 14) {
+      g.beginPath(); g.moveTo(W / 2, y); g.lineTo(W / 2, y + 7); g.strokePath();
+    }
+
+    // 판정선
+    g.lineStyle(2, C.HIT_LINE, 1);
+    this.laneX.forEach(x => {
+      g.beginPath();
+      g.moveTo(x - lw, this.hitY);
+      g.lineTo(x + lw, this.hitY);
+      g.strokePath();
+    });
+  }
+
+  // ─── HUD ──────────────────────────────────────
+  _buildHUD() {
+    const W = this.W;
+    const style = (sz, col) => ({
+      fontFamily: '"mulmaru", sans-serif',
+      fontSize: sz,
+      color: col,
+    });
+
+    // RPM (메인 점수)
+    this.rpmTxt = this.add.text(W / 2, 36, 'RPM 0', style('38px', C.TEXT_SCORE))
+      .setOrigin(0.5);
+
+    // 콤보
+    this.comboTxt = this.add.text(W / 2, 76, '', style('22px', C.TEXT_COMBO))
+      .setOrigin(0.5);
+
+    // 피드백 텍스트
+    this.fbTxts = this.laneX.map(x =>
+      this.add.text(x, this.hitY - NOTE_R - 18, '', style('26px', C.FB_PERFECT))
+        .setOrigin(0.5, 1).setAlpha(0)
+    );
+  }
+
+  _drawCard() { /* no-op */ }
+
+  // ─── 하단 캐릭터 (1/2/3.png) ───────────────────
+  _buildChar() {
+    const W = this.W, H = this.H;
+    const areaTop = this.hitY + NOTE_R + 12;
+    const areaH   = H - areaTop - 12;
+    const size    = Math.min(areaH, 160);
+    const cy      = H - size / 2 - 10;
+
+    this.charSprite = this.add.image(W / 2, cy, 'char_idle').setOrigin(0.5);
+    // 원본 비율을 유지하면서 size 안에 맞춤
+    const tex = this.textures.get('char_idle').getSourceImage();
+    if (tex && tex.width && tex.height) {
+      const s = Math.min(size / tex.width, size / tex.height);
+      this.charSprite.setScale(s);
+    } else {
+      this.charSprite.setDisplaySize(size, size);
+    }
+
+    // 누름 상태 추적 (키보드 + 터치 다중 입력 지원)
+    this.pressCount = [0, 0];
+    this._refreshChar();
+  }
+
+  _refreshChar() {
+    if (!this.charSprite) return;
+    const L = this.pressCount[0] > 0;
+    const R = this.pressCount[1] > 0;
+    let key = 'char_idle';
+    if (L && !R)      key = 'char_left';
+    else if (R && !L) key = 'char_right';
+    else if (L && R)  key = 'char_left'; // 동시 누름은 왼쪽 우선 (필요 시 변경)
+    if (this.charSprite.texture.key !== key) {
+      this.charSprite.setTexture(key);
+    }
+  }
+
+  _pressOn(lane) {
+    this.pressCount[lane]++;
+    this._refreshChar();
+  }
+  _pressOff(lane) {
+    if (this.pressCount[lane] > 0) this.pressCount[lane]--;
+    this._refreshChar();
+    // 홀드 노트가 활성 상태였다면 종료 판정
+    if (this.gameRunning && this.holdActive && this.holdActive[lane]) {
+      this._judgeRelease(lane);
+    }
+  }
+
+  // ─── 시작 화면 ────────────────────────────────
+  _buildStartScreen() {
+    const W = this.W, H = this.H;
+    this.startCont = this.add.container(0, 0);
+
+    const overlay = this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.75);
+
+    const card = this.add.graphics();
+    card.lineStyle(2, 0xffffff, 1);
+    card.strokeRect(W / 2 - 170, H / 2 - 130, 340, 260);
+
+    const title = this.add.text(W / 2, H / 2 - 60, '챱츄르냥이', {
+      fontFamily: '"mulmaru", sans-serif',
+      fontSize: '48px', color: '#ffffff',
+    }).setOrigin(0.5);
+
+    const tap = this.add.text(W / 2, H / 2 + 25, '▶ 눌러서 시작 ◀', {
+      fontFamily: '"mulmaru", sans-serif',
+      fontSize: '24px', color: '#ffffff',
+    }).setOrigin(0.5);
+
+    const guide = this.add.text(W / 2, H / 2 + 80, '[F / ←]      [J / →]', {
+      fontFamily: '"mulmaru", sans-serif',
+      fontSize: '20px', color: '#888888',
+    }).setOrigin(0.5);
+
+    this.startCont.add([overlay, card, title, tap, guide]);
+
+    this.tweens.add({
+      targets: tap, alpha: 0.2,
+      duration: 600, yoyo: true, repeat: -1, ease: 'Linear',
+    });
+  }
+
+  // ─── 노트 풀 ──────────────────────────────────
+  _scaleFish(sp) {
+    const tex = this.textures.get('note').getSourceImage();
+    if (tex && tex.width && tex.height) {
+      const target = NOTE_R * 4.68;
+      const s = Math.min(target / tex.width, target / tex.height);
+      sp.setScale(s);
+    }
+  }
+  _getNote() {
+    if (this.notePool.length) {
+      const n = this.notePool.pop();
+      n.sp.setVisible(true);
+      return n;
+    }
+    const sp = this.add.image(0, 0, 'note').setOrigin(0.5);
+    this._scaleFish(sp);
+    return { sp, tail: null, bar: null, isHold: false, holding: false };
+  }
+  _ensureHoldParts(note) {
+    if (!note.tail) {
+      note.tail = this.add.image(0, 0, 'note').setOrigin(0.5);
+      this._scaleFish(note.tail);
+    }
+    if (!note.bar) {
+      note.bar = this.add.rectangle(0, 0, 36, 1, 0xffffff, 1).setOrigin(0.5, 0);
+      note.bar.setStrokeStyle(2, 0x000000, 1);
+    }
+    note.tail.setVisible(true);
+    note.bar.setVisible(true);
+    note.bar.setFillStyle(0xffffff, 1);
+    note.bar.setDepth(0);
+    note.tail.setDepth(1);
+    note.sp.setDepth(2);
+  }
+  _recycleNote(note) {
+    note.sp.setVisible(false);
+    if (note.tail) note.tail.setVisible(false);
+    if (note.bar)  note.bar.setVisible(false);
+    note.isHold = false;
+    note.holding = false;
+    note.holdEndTime = 0;
+    this.notePool.push(note);
+  }
+
+  // ─── 파티클 ───────────────────────────────────
+  _burst(x, y) {
+    for (let i = 0; i < 8; i++) {
+      const sp = this.add.image(x, y, 'particle').setScale(0.8).setAlpha(1);
+      const angle = (i / 8) * Math.PI * 2;
+      const dist  = Phaser.Math.Between(30, 60);
+      this.tweens.add({
+        targets: sp,
+        x: x + Math.cos(angle) * dist,
+        y: y + Math.sin(angle) * dist,
+        alpha: 0, scale: 0.2,
+        duration: Phaser.Math.Between(300, 500),
+        ease: 'Quad.Out',
+        onComplete: () => sp.destroy(),
+      });
+    }
+  }
+
+  _burstHearts() {
+    if (!this.charSprite) return;
+    const cx = this.charSprite.x;
+    const cy = this.charSprite.y;
+    const w  = this.charSprite.displayWidth || 120;
+    const h  = this.charSprite.displayHeight || 120;
+    const count = Phaser.Math.Between(3, 4);
+    for (let i = 0; i < count; i++) {
+      const ox = Phaser.Math.Between(-w * 0.55, w * 0.55);
+      const oy = Phaser.Math.Between(-h * 0.45, h * 0.1);
+      const x  = cx + ox;
+      const y  = cy + oy;
+      const heart = this.add.image(x, y, 'heart').setOrigin(0.5).setAlpha(0).setDepth(900);
+      // 원본 비율을 유지하며 적당한 크기로
+      const tex = this.textures.get('heart').getSourceImage();
+      const baseScale = tex && tex.width
+        ? Math.min((NOTE_R * 1.6) / tex.width, (NOTE_R * 1.6) / tex.height)
+        : 0.6;
+      heart.setScale(baseScale * 0.4);
+      // 페이드 인
+      this.tweens.add({
+        targets: heart,
+        alpha: 1,
+        scale: baseScale,
+        y: y - 8,
+        duration: 140,
+        delay: i * 40,
+        ease: 'Back.Out',
+      });
+      // 즉시 페이드 아웃
+      this.tweens.add({
+        targets: heart,
+        alpha: 0,
+        scale: baseScale * 1.4,
+        y: y - 40,
+        duration: 380,
+        delay: 160 + i * 40,
+        ease: 'Quad.In',
+        onComplete: () => heart.destroy(),
+      });
+    }
+  }
+
+  // ─── 입력 ─────────────────────────────────────
+  _onPointer(ptr) {
+    unlockAudio();
+    const lane = ptr.x < this.W / 2 ? 0 : 1;
+    if (!this._pointerLane) this._pointerLane = {};
+    this._pointerLane[ptr.id] = lane;
+    this._pressOn(lane);
+    if (!this.gameRunning) { this._startGame(); return; }
+    this._judgeInput(lane);
+  }
+
+  _onPointerUp(ptr) {
+    if (!this._pointerLane) return;
+    const lane = this._pointerLane[ptr.id];
+    if (lane === undefined) return;
+    delete this._pointerLane[ptr.id];
+    this._pressOff(lane);
+  }
+
+  async _startGame() {
+    if (this._starting) return;
+    this._starting = true;
+    unlockAudio(); // 안전하게 한 번 더 호출
+    this.startCont.destroy();
+
+    // 오디오 컨텍스트 재개 / BGM 디코딩을 기다리되, 모바일에서 멈추지 않도록 최대 800ms만 대기
+    const ctx = getACtx();
+    const timeout = (ms) => new Promise(res => setTimeout(res, ms));
+    try {
+      const resumeP = (ctx.state !== 'running') ? ctx.resume() : Promise.resolve();
+      await Promise.race([resumeP, timeout(800)]);
+    } catch (e) {}
+    if (sfxReady.bgm) {
+      try { await Promise.race([sfxReady.bgm, timeout(800)]); } catch(e) {}
+    }
+
+    this.audioCtx   = ctx;
+    // BGM은 콤보 10 이상일 때 재생하므로 여기서는 시작하지 않음
+    this.audioStart  = ctx.currentTime;
+    this.gameStartAt = performance.now();
+    this.bgmStarted  = false;
+    this.gameRunning = true;
+  }
+
+  // ─── 판정 ─────────────────────────────────────
+  _judgeInput(lane) {    // 누를 때마다 시작점으로 효과음 재생
+    this._playLaneSfx(lane);    this._flashJudge(lane);
+    let best = null, bestD = Infinity;
+    for (const n of this.notes) {
+      if (!n.active || n.lane !== lane || n.holding) continue;
+      const d = Math.abs((n.hitTime - this.songTime) * 1000);
+      if (d < bestD) { bestD = d; best = n; }
+    }
+    if (best && bestD <= HIT_WIN_MS) this._onHit(best, bestD);
+    else this._showFB(lane, '실패', C.FB_MISS);
+  }
+
+  // 키를 뗌 때 — 홀드 종료 판정
+  _judgeRelease(lane) {
+    const note = this.holdActive && this.holdActive[lane];
+    if (!note) return;
+    this.holdActive[lane] = null;
+    note.holding = false;
+
+    const dt = (note.holdEndTime - this.songTime) * 1000;
+    if (dt <= HIT_WIN_MS) {
+      // 정확한 타이밍에 뗼 → 홀드 성공
+      this._completeHold(note);
+    } else if (dt > HIT_WIN_MS) {
+      // 너무 일찍 뗌 → 실패
+      this._failHold(note);
+    }
+  }
+
+  _onHit(note, dMs) {
+    // 홀드 노트의 머리를 친 경우: 콤보 증가 + 누르고 있는 상태로 전환
+    if (note.isHold) {
+      note.holding = true;
+      if (!this.holdActive) this.holdActive = [null, null];
+      this.holdActive[note.lane] = note;
+      note.lastHoldSfx = this.songTime;
+      this.hitCount++;
+      this.combo++;
+      if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+
+      let label, pts, col;
+      if      (dMs < HIT_WIN_MS * 0.40) { label = '완벽!'; pts = 300; col = C.FB_PERFECT; }
+      else if (dMs < HIT_WIN_MS * 0.72) { label = '굿!';   pts = 200; col = C.FB_GREAT;   }
+      else                               { label = '좋아';  pts = 100; col = C.FB_GOOD;    }
+      this.score += pts + this.combo * 10;
+      if (this.combo >= 5 && !this.bgmStarted) {
+        this.bgmStarted = true;
+        playBgm(0.66, true);
+      }
+      this._burst(this.laneX[note.lane], this.hitY);
+      this._showFB(note.lane, label, col);
+      this._updateHUD();
+      return;
+    }
+
+    note.active = false;
+    this._recycleNote(note);
+    this.notes = this.notes.filter(n => n !== note);
+    this.hitCount++;
+    this.combo++;
+    if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+
+    let label, pts, col;
+    if      (dMs < HIT_WIN_MS * 0.40) { label = '완벽!'; pts = 300; col = C.FB_PERFECT; }
+    else if (dMs < HIT_WIN_MS * 0.72) { label = '굿!';   pts = 200; col = C.FB_GREAT;   }
+    else                               { label = '좋아';  pts = 100; col = C.FB_GOOD;    }
+
+    this.score += pts + this.combo * 10;
+    // 콤보 5 이상 달성 시 BGM 재생
+    if (this.combo >= 5 && !this.bgmStarted) {
+      this.bgmStarted = true;
+      playBgm(0.66, true);
+    }
+    this._burst(this.laneX[note.lane], this.hitY);
+    this._showFB(note.lane, label, col);
+    this._updateHUD();
+  }
+
+  // 홀드 종료 성공: 코리 fish 제거 + 추가 점수
+  _completeHold(note) {
+    note.active = false;
+    this._recycleNote(note);
+    this.notes = this.notes.filter(n => n !== note);
+    this.hitCount++;
+    this.combo++;
+    if (this.combo > this.maxCombo) this.maxCombo = this.combo;
+    this.score += 200 + this.combo * 10;
+    this._burst(this.laneX[note.lane], this.hitY);
+    this._showFB(note.lane, '찥!', C.FB_PERFECT);
+    this._updateHUD();
+  }
+
+  // 홀드 중단 실패
+  _failHold(note) {
+    note.active = false;
+    this._recycleNote(note);
+    this.notes = this.notes.filter(n => n !== note);
+    this.combo = 0;
+    this._showFB(note.lane, '놓침', C.FB_MISS);
+    this._updateHUD();
+    playMiss();
+    this.cameras.main.shake(120, 0.004);
+  }
+
+  _onMiss(note) {
+    note.active = false;
+    this._recycleNote(note);
+    this.notes = this.notes.filter(n => n !== note);
+    this.combo = 0;
+    this._showFB(note.lane, '실패', C.FB_MISS);
+    this._updateHUD();
+    playMiss();
+    this.cameras.main.shake(180, 0.006);
+    this.cameras.main.flash(120, 255, 255, 255);
+  }
+
+  // RPM = 맞춘 블록 수 × 속도
+  // 속도 = 기본 100 + 현재 콤보 × 25 (콤보가 높을수록 더 빨라짐)
+  _calcRpm() {
+    const speed = 100 + this.combo * 25;
+    return this.hitCount * speed;
+  }
+
+  _updateHUD() {
+    const rpm = this._calcRpm();
+    this.rpmTxt.setText('RPM ' + rpm.toLocaleString());
+    if (this.combo > 1) {
+      this.comboTxt.setText('콤보 × ' + this.combo);
+    } else {
+      this.comboTxt.setText('');
+    }
+    if (this.combo >= 10) this._showComboImpact(this.combo);
+  }
+
+  _showComboImpact(combo) {
+    if (combo >= 30 && combo % 10 === 0) {
+      playSfx('miao');
+      this._burstHearts();
+    }
+    const W = this.W, H = this.H;
+    const t = this.add.text(W / 2, H / 2, String(combo), {
+      fontFamily: '"mulmaru", sans-serif',
+      fontSize: '144px',
+      color: '#ffffff',
+      stroke: '#000000',
+      strokeThickness: 8,
+    }).setOrigin(0.5).setDepth(1000).setAlpha(0).setScale(0.4);
+    this.tweens.add({
+      targets: t,
+      scale: 1.3,
+      alpha: 0.55,
+      duration: 120,
+      ease: 'Back.Out',
+    });
+    this.tweens.add({
+      targets: t,
+      alpha: 0,
+      scale: 1.6,
+      duration: 380,
+      delay: 140,
+      ease: 'Quad.In',
+      onComplete: () => t.destroy(),
+    });
+  }
+
+  _playLaneSfx(lane) {
+    const ok = playSfx(lane === 0 ? 'left' : 'right');
+    if (!ok) playPop();
+  }
+
+  _flashJudge(lane) {
+    const sp = this.judgeSprites[lane];
+    sp.setTexture('judge_hit');
+    this.tweens.add({
+      targets: sp, scaleX: 1.3, scaleY: 1.3,
+      duration: 80, yoyo: true, ease: 'Quad.Out',
+      onComplete: () => sp.setTexture('judge_idle'),
+    });
+  }
+
+  _showFB(lane, text, color) {
+    const t = this.fbTxts[lane];
+    const baseY = this.hitY - NOTE_R - 18;
+    t.setY(baseY).setText(text).setColor(color).setAlpha(1);
+    this.tweens.killTweensOf(t);
+    this.tweens.add({
+      targets: t, alpha: 0, y: baseY - 55,
+      duration: 380, ease: 'Quad.Out',
+      onComplete: () => t.setY(baseY),
+    });
+  }
+
+  // ─── 결과 화면 ────────────────────────────────
+  _endGame() {
+    this.gameRunning = false;
+    stopBgm();
+    const W = this.W, H = this.H;
+    const acc = Math.round((this.hitCount / this.totalNotes) * 100);
+    let grade = acc >= 95 ? 'S' : acc >= 85 ? 'A' : acc >= 70 ? 'B' : acc >= 50 ? 'C' : 'D';
+    const finalRpm = this._calcRpm();
+
+    this.add.rectangle(W / 2, H / 2, W, H, 0x000000, 0.85);
+
+    const card = this.add.graphics();
+    card.lineStyle(2, 0xffffff, 1);
+    card.strokeRect(W / 2 - 180, H / 2 - 200, 360, 400);
+
+    const han = (sz, col) => ({
+      fontFamily: '"mulmaru", sans-serif', fontSize: sz, color: col, align: 'center',
+    });
+
+    this.add.text(W / 2, H / 2 - 165, '경기 종료',           han('32px', '#ffffff')).setOrigin(0.5);
+    this.add.text(W / 2, H / 2 - 100, grade,                  han('80px', '#ffffff')).setOrigin(0.5);
+    this.add.text(W / 2, H / 2 - 15,  finalRpm.toLocaleString(), han('48px',  '#ffffff')).setOrigin(0.5);
+    this.add.text(W / 2, H / 2 + 22,  'RPM',                  han('20px',  '#888888')).setOrigin(0.5);
+    this.add.text(W / 2, H / 2 + 65,  '최고 콤보   ' + this.maxCombo, han('22px', '#cccccc')).setOrigin(0.5);
+    this.add.text(W / 2, H / 2 + 95,  '정확도    ' + acc + '%',         han('22px', '#cccccc')).setOrigin(0.5);
+
+    const retryTxt = this.add.text(W / 2, H / 2 + 160, '▶ 다시 하기 ◀', han('22px', '#ffffff')).setOrigin(0.5);
+    this.tweens.add({ targets: retryTxt, alpha: 0.2, duration: 600, yoyo: true, repeat: -1, ease: 'Linear' });
+
+    this.input.once('pointerdown', () => this.scene.restart());
+    window.addEventListener('keydown', () => this.scene.restart(), { once: true });
+  }
+
+  // ─── 메인 루프 ────────────────────────────────
+  update() {
+    if (!this.gameRunning) return;
+    // AudioContext 시간 사용 가능 시 더 정확, 아니면 performance.now 폴백
+    if (this.audioCtx && this.audioCtx.state === 'running') {
+      this.songTime = this.audioCtx.currentTime - this.audioStart;
+    } else {
+      this.songTime = (performance.now() - this.gameStartAt) / 1000;
+    }
+    const travelSec = (this.hitY + NOTE_R) / NOTE_SPEED;
+
+    // 홀드 중인 레인은 효과음을 일정 간격으로 반복 재생
+    const HOLD_SFX_INTERVAL = 0.12; // 초
+    if (this.holdActive) {
+      for (let lane = 0; lane < 2; lane++) {
+        const hn = this.holdActive[lane];
+        if (!hn || !hn.holding) continue;
+        if (this.songTime - (hn.lastHoldSfx || 0) >= HOLD_SFX_INTERVAL) {
+          this._playLaneSfx(lane);
+          hn.lastHoldSfx = this.songTime;
+        }
+      }
+    }
+
+    // 노트 스폰
+    while (
+      this.pendingNotes.length &&
+      this.pendingNotes[0].hitTime - this.songTime <= travelSec + 0.1
+    ) {
+      const d    = this.pendingNotes.shift();
+      const note = this._getNote();
+      note.lane    = d.lane;
+      note.hitTime = d.hitTime;
+      note.active  = true;
+      note.isHold  = !!d.holdDuration;
+      note.holding = false;
+      note.holdEndTime = d.holdDuration ? d.hitTime + d.holdDuration : 0;
+      note.sp.setPosition(this.laneX[d.lane], -NOTE_R).setVisible(true);
+      if (note.isHold) {
+        this._ensureHoldParts(note);
+        note.bar.x = this.laneX[d.lane];
+        note.tail.x = this.laneX[d.lane];
+      } else {
+        if (note.tail) note.tail.setVisible(false);
+        if (note.bar)  note.bar.setVisible(false);
+      }
+      this.notes.push(note);
+    }
+
+    // 노트 이동 + 홀드 처리
+    const toMiss = [];
+    for (const n of this.notes) {
+      if (!n.active) continue;
+      const headY = this.hitY - (n.hitTime - this.songTime) * NOTE_SPEED;
+      if (n.holding) {
+        // 머리는 판정선에 고정, tail/bar만 내려온다
+        n.sp.setPosition(this.laneX[n.lane], this.hitY);
+      } else {
+        n.sp.setPosition(this.laneX[n.lane], headY);
+      }
+
+      if (n.isHold) {
+        const tailY = this.hitY - (n.holdEndTime - this.songTime) * NOTE_SPEED;
+        n.tail.setPosition(this.laneX[n.lane], tailY);
+        // bar: head와 tail 사이 (head가 아래, tail이 위)
+        const headRefY = n.holding ? this.hitY : headY;
+        const top = Math.min(headRefY, tailY);
+        const bot = Math.max(headRefY, tailY);
+        n.bar.setPosition(this.laneX[n.lane], top);
+        n.bar.setSize(36, Math.max(0, bot - top));
+        // 누르고 있을 때는 대비 강화 (새캌송이 주황색 느낌)
+        if (n.holding) {
+          n.bar.setFillStyle(0xffe66b, 1);
+        } else {
+          n.bar.setFillStyle(0xffffff, 1);
+        }
+      }
+
+      // 미스 판정: 홀드가 아닌 머리가 판정선을 너무 많이 지나면
+      if (!n.holding && headY > this.hitY + NOTE_R + (HIT_WIN_MS / 1000) * NOTE_SPEED) {
+        toMiss.push(n);
+      }
+      // 홀드 자동 종료: 누르고 있는 중 tail이 판정선을 널은 후 손 안 뗄 경우 → 성공으로 간주
+      if (n.holding && this.songTime >= n.holdEndTime + HIT_WIN_MS / 1000) {
+        // 아직 뗼 신호가 안 왔으면 성공 처리 (계속 누르고 있으면 괜찮으니 성공)
+        if (this.holdActive && this.holdActive[n.lane] === n) {
+          this.holdActive[n.lane] = null;
+          this._completeHold(n);
+        }
+      }
+    }
+    toMiss.forEach(n => this._onMiss(n));
+
+    // 클리어 체크
+    if (this.pendingNotes.length === 0 && this.notes.length === 0 && this.songTime > 1.0) {
+      this._endGame();
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════
+//  Phaser Config
+// ═══════════════════════════════════════════════
+function startGame() {
+  new Phaser.Game({
+    type: Phaser.AUTO,
+    backgroundColor: '#111111',
+    parent: 'game-container',
+    scene: [GameScene],
+    scale: {
+      mode:       Phaser.Scale.FIT,
+      autoCenter: Phaser.Scale.CENTER_BOTH,
+      width:      GAME_W,
+      height:     GAME_H,
+    },
+    render: { antialias: false, pixelArt: true, roundPixels: true },
+    fps: { target: 60, forceSetTimeOut: false },
+    input: { activePointers: 4 },
+    audio: { disableWebAudio: false, noAudio: true },
+  });
+}
+
+// 폰트 로드를 기다리되, 모바일/네트워크 지연을 대비해 최대 1.5초만 대기 후 게임 시작
+(async () => {
+  const timeout = (ms) => new Promise(res => setTimeout(res, ms));
+  try {
+    if (document.fonts && document.fonts.load) {
+      const fontsP = (async () => {
+        await Promise.all([
+          document.fonts.load('16px "mulmaru"'),
+          document.fonts.load('32px "mulmaru"'),
+          document.fonts.load('48px "mulmaru"'),
+        ]);
+        await document.fonts.ready;
+      })();
+      await Promise.race([fontsP, timeout(1500)]);
+    }
+  } catch (e) { /* 무시하고 계속 진행 */ }
+  startGame();
+})();
+</script>
+</body>
+</html>
