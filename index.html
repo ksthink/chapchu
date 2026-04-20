@@ -202,8 +202,8 @@ function getACtx() {
 }
 
 // 디코딩된 효과음 버퍼 (재생 시 BufferSource만 새로 생성)
-const sfxBuffers  = { left: null, right: null, bgm: null, miao: null };
-const sfxReady    = { left: null, right: null, bgm: null, miao: null };
+const sfxBuffers  = { left: null, right: null, bgm: null, miao: null, miayo: null };
+const sfxReady    = { left: null, right: null, bgm: null, miao: null, miayo: null };
 async function loadSfx(url, key) {
   const p = (async () => {
     try {
@@ -254,6 +254,17 @@ function stopBgm() {
   try { if (bgmSource) bgmSource.stop(); } catch(e) {}
   bgmSource = null;
   bgmGain = null;
+}
+// BGM 피치 / 볼륨 동적 조절 (피버 모드용)
+function setBgmRate(rate) {
+  if (bgmSource && bgmSource.playbackRate) {
+    try { bgmSource.playbackRate.value = rate; } catch(e) {}
+  }
+}
+function setBgmVolume(v) {
+  if (bgmGain) {
+    try { bgmGain.gain.value = v; } catch(e) {}
+  }
 }
 
 // iOS / 모바일 Safari 언락: 사용자 제스처 핸들러 안에서 "동기적"으로 호출되어야 함
@@ -378,12 +389,14 @@ class GameScene extends Phaser.Scene {
     loadSfx('chu.mp3',  'right');
     loadSfx('back.mp3', 'bgm');
     loadSfx('miao.mp3', 'miao');
+    loadSfx('miayo.mp3','miayo');
 
     // 하단 캐릭터 이미지
     this.load.image('char_idle',  '1.png');
     this.load.image('char_left',  '2.png');
     this.load.image('char_right', '3.png');
     this.load.image('heart',      'heart.png');
+    this.load.image('catlove',    'catlove.png');
   }
 
   create() {
@@ -408,6 +421,13 @@ class GameScene extends Phaser.Scene {
     this.notePool     = [];
     this.holdActive   = [null, null];
     this.pendingNotes = songData.map(n => ({...n})).sort((a,b) => a.hitTime - b.hitTime);
+
+    // 피버 모드 상태
+    this.feverActive    = false;
+    this.feverEndTime   = 0;
+    this.FEVER_THRESHOLD = 50;
+    this.FEVER_DURATION  = 10; // 초
+    this.FEVER_MULT      = 2;
 
     // ── 배경 그라디언트 ──
     this._drawBg();
@@ -530,6 +550,24 @@ class GameScene extends Phaser.Scene {
       this.add.text(x, this.hitY - NOTE_R - 18, '', style('26px', C.FB_PERFECT))
         .setOrigin(0.5, 1).setAlpha(0)
     );
+
+    // 피버 모드 UI
+    const W2 = this.W, H2 = this.H;
+    // 화면 가장자리 글로우 테두리 (피버 시 표시)
+    this.feverBorder = this.add.graphics().setDepth(950);
+    this.feverBorder.lineStyle(8, 0xff66aa, 1);
+    this.feverBorder.strokeRect(2, 2, W2 - 4, H2 - 4);
+    this.feverBorder.setAlpha(0);
+    // 피버 게이지 바 배경 + 진행
+    const gx = W2 / 2 - 110, gy = 110, gw = 220, gh = 8;
+    this.feverGaugeBg = this.add.rectangle(gx, gy, gw, gh, 0x333333, 1).setOrigin(0, 0.5).setDepth(960);
+    this.feverGaugeFg = this.add.rectangle(gx, gy, gw, gh, 0xff66aa, 1).setOrigin(0, 0.5).setDepth(961);
+    this.feverGaugeBg.setVisible(false);
+    this.feverGaugeFg.setVisible(false);
+    this.feverGaugeMaxW = gw;
+    this.feverLabel = this.add.text(W2 / 2, gy - 16, 'FEVER!', {
+      fontFamily: '"mulmaru", sans-serif', fontSize: '18px', color: '#ff99cc',
+    }).setOrigin(0.5).setDepth(962).setAlpha(0);
   }
 
   _drawCard() { /* no-op */ }
@@ -680,6 +718,33 @@ class GameScene extends Phaser.Scene {
     }
   }
 
+  _showCatLove() {
+    const W = this.W, H = this.H;
+    const img = this.add.image(W / 2, H / 2, 'catlove').setOrigin(0.5).setAlpha(0).setDepth(970);
+    const tex = this.textures.get('catlove').getSourceImage();
+    const target = Math.min(W * 0.75, H * 0.5);
+    const baseScale = tex && tex.width
+      ? Math.min(target / tex.width, target / tex.height)
+      : 1;
+    img.setScale(baseScale * 0.7);
+    this.tweens.add({
+      targets: img,
+      alpha: 1,
+      scale: baseScale,
+      duration: 180,
+      ease: 'Back.Out',
+    });
+    this.tweens.add({
+      targets: img,
+      alpha: 0,
+      scale: baseScale * 1.15,
+      duration: 420,
+      delay: 220,
+      ease: 'Quad.In',
+      onComplete: () => img.destroy(),
+    });
+  }
+
   _burstHearts() {
     if (!this.charSprite) return;
     const cx = this.charSprite.x;
@@ -777,7 +842,7 @@ class GameScene extends Phaser.Scene {
       if (d < bestD) { bestD = d; best = n; }
     }
     if (best && bestD <= HIT_WIN_MS) this._onHit(best, bestD);
-    else this._showFB(lane, '실패', C.FB_MISS);
+    else { playSfx('miao'); this._showFB(lane, '실패', C.FB_MISS); }
   }
 
   // 키를 뗌 때 — 홀드 종료 판정
@@ -812,7 +877,7 @@ class GameScene extends Phaser.Scene {
       if      (dMs < HIT_WIN_MS * 0.40) { label = '완벽!'; pts = 300; col = C.FB_PERFECT; }
       else if (dMs < HIT_WIN_MS * 0.72) { label = '굿!';   pts = 200; col = C.FB_GREAT;   }
       else                               { label = '좋아';  pts = 100; col = C.FB_GOOD;    }
-      this.score += pts + this.combo * 10;
+      this.score += (pts + this.combo * 10) * (this.feverActive ? this.FEVER_MULT : 1);
       if (this.combo >= 5 && !this.bgmStarted) {
         this.bgmStarted = true;
         playBgm(0.66, true);
@@ -835,7 +900,7 @@ class GameScene extends Phaser.Scene {
     else if (dMs < HIT_WIN_MS * 0.72) { label = '굿!';   pts = 200; col = C.FB_GREAT;   }
     else                               { label = '좋아';  pts = 100; col = C.FB_GOOD;    }
 
-    this.score += pts + this.combo * 10;
+    this.score += (pts + this.combo * 10) * (this.feverActive ? this.FEVER_MULT : 1);
     // 콤보 5 이상 달성 시 BGM 재생
     if (this.combo >= 5 && !this.bgmStarted) {
       this.bgmStarted = true;
@@ -854,7 +919,7 @@ class GameScene extends Phaser.Scene {
     this.hitCount++;
     this.combo++;
     if (this.combo > this.maxCombo) this.maxCombo = this.combo;
-    this.score += 200 + this.combo * 10;
+    this.score += (200 + this.combo * 10) * (this.feverActive ? this.FEVER_MULT : 1);
     this._burst(this.laneX[note.lane], this.hitY);
     this._showFB(note.lane, '찥!', C.FB_PERFECT);
     this._updateHUD();
@@ -866,9 +931,11 @@ class GameScene extends Phaser.Scene {
     this._recycleNote(note);
     this.notes = this.notes.filter(n => n !== note);
     this.combo = 0;
+    if (this.feverActive) this._endFever();
     this._showFB(note.lane, '놓침', C.FB_MISS);
     this._updateHUD();
     playMiss();
+    playSfx('miao');
     this.cameras.main.shake(120, 0.004);
   }
 
@@ -877,9 +944,11 @@ class GameScene extends Phaser.Scene {
     this._recycleNote(note);
     this.notes = this.notes.filter(n => n !== note);
     this.combo = 0;
+    if (this.feverActive) this._endFever();
     this._showFB(note.lane, '실패', C.FB_MISS);
     this._updateHUD();
     playMiss();
+    playSfx('miao');
     this.cameras.main.shake(180, 0.006);
     this.cameras.main.flash(120, 255, 255, 255);
   }
@@ -900,11 +969,90 @@ class GameScene extends Phaser.Scene {
       this.comboTxt.setText('');
     }
     if (this.combo >= 10) this._showComboImpact(this.combo);
+    // 피버 진입 조건
+    if (this.combo >= this.FEVER_THRESHOLD && !this.feverActive) {
+      this._startFever();
+    }
+  }
+
+  _startFever() {
+    this.feverActive  = true;
+    this.feverEndTime = this.songTime + this.FEVER_DURATION;
+    // 피버 진입 효과음
+    playSfx('miayo');
+    // 피버 진입 이미지 연출
+    this._showCatLove();
+    // BGM 피치업
+    setBgmRate(1.12);
+    setBgmVolume(0.78);
+    // 테두리 펄스
+    this.tweens.killTweensOf(this.feverBorder);
+    this.feverBorder.setAlpha(0);
+    this.tweens.add({
+      targets: this.feverBorder,
+      alpha: { from: 0.85, to: 0.35 },
+      duration: 600, yoyo: true, repeat: -1, ease: 'Sine.InOut',
+    });
+    // 게이지 표시
+    this.feverGaugeBg.setVisible(true);
+    this.feverGaugeFg.setVisible(true);
+    this.feverGaugeFg.width = this.feverGaugeMaxW;
+    this.tweens.killTweensOf(this.feverLabel);
+    this.feverLabel.setAlpha(0).setScale(0.5);
+    this.tweens.add({
+      targets: this.feverLabel, alpha: 1, scale: 1.2,
+      duration: 200, ease: 'Back.Out',
+      onComplete: () => {
+        this.tweens.add({
+          targets: this.feverLabel, alpha: 0.8, scale: 1,
+          duration: 400, yoyo: true, repeat: -1, ease: 'Sine.InOut',
+        });
+      },
+    });
+    // 캐릭터 살짝 들썩
+    if (this.charSprite) {
+      this.tweens.killTweensOf(this.charSprite);
+      this._charBaseScale = this.charSprite.scaleX;
+      this.tweens.add({
+        targets: this.charSprite,
+        scaleX: this._charBaseScale * 1.08,
+        scaleY: this._charBaseScale * 1.08,
+        duration: 280, yoyo: true, repeat: -1, ease: 'Sine.InOut',
+      });
+    }
+    this.cameras.main.flash(220, 255, 120, 200);
+  }
+
+  _endFever() {
+    if (!this.feverActive) return;
+    this.feverActive = false;
+    setBgmRate(1.0);
+    setBgmVolume(0.66);
+    this.tweens.killTweensOf(this.feverBorder);
+    this.tweens.add({
+      targets: this.feverBorder, alpha: 0,
+      duration: 250, ease: 'Quad.Out',
+    });
+    this.tweens.killTweensOf(this.feverLabel);
+    this.tweens.add({
+      targets: this.feverLabel, alpha: 0,
+      duration: 250, ease: 'Quad.Out',
+    });
+    this.feverGaugeBg.setVisible(false);
+    this.feverGaugeFg.setVisible(false);
+    if (this.charSprite && this._charBaseScale) {
+      this.tweens.killTweensOf(this.charSprite);
+      this.tweens.add({
+        targets: this.charSprite,
+        scaleX: this._charBaseScale,
+        scaleY: this._charBaseScale,
+        duration: 200, ease: 'Quad.Out',
+      });
+    }
   }
 
   _showComboImpact(combo) {
     if (combo >= 30 && combo % 10 === 0) {
-      playSfx('miao');
       this._burstHearts();
     }
     const W = this.W, H = this.H;
@@ -963,6 +1111,7 @@ class GameScene extends Phaser.Scene {
   // ─── 결과 화면 ────────────────────────────────
   _endGame() {
     this.gameRunning = false;
+    if (this.feverActive) this._endFever();
     stopBgm();
     const W = this.W, H = this.H;
     const acc = Math.round((this.hitCount / this.totalNotes) * 100);
@@ -1014,6 +1163,17 @@ class GameScene extends Phaser.Scene {
           this._playLaneSfx(lane);
           hn.lastHoldSfx = this.songTime;
         }
+      }
+    }
+
+    // 피버 게이지 갱신 / 시간 종료
+    if (this.feverActive) {
+      const remain = this.feverEndTime - this.songTime;
+      if (remain <= 0) {
+        this._endFever();
+      } else {
+        const ratio = Math.max(0, remain / this.FEVER_DURATION);
+        this.feverGaugeFg.width = this.feverGaugeMaxW * ratio;
       }
     }
 
