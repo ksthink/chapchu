@@ -43,7 +43,7 @@
 </head>
 <body>
 <div id="game-container"></div>
-<div class="__font-preload">챱츄르냥이 0123456789 눌러서 시작 콤보 완벽 굿 좋아 실패 경기 종료 다시 하기 최고 정확도 RPM</div>
+<div class="__font-preload">챱츄르냥이 0123456789 눌러서 시작 콤보 완벽 굿 좋아 실패 경기 종료 다시 하기 최고 정확도 RPM 제작자 @ksthink</div>
 <script>
 // 첫 사용자 제스처에서 즉시 오디오 언락 (iOS Safari 대응)
 function _earlyUnlock() {
@@ -650,7 +650,12 @@ class GameScene extends Phaser.Scene {
       fontSize: '20px', color: '#888888',
     }).setOrigin(0.5);
 
-    this.startCont.add([overlay, card, title, tap, guide]);
+    const credit = this.add.text(W / 2, H / 2 + 115, '제작자 : @ksthink', {
+      fontFamily: '"mulmaru", sans-serif',
+      fontSize: '12px', color: '#666666',
+    }).setOrigin(0.5);
+
+    this.startCont.add([overlay, card, title, tap, guide, credit]);
 
     this.tweens.add({
       targets: tap, alpha: 0.2,
