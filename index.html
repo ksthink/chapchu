@@ -1042,10 +1042,12 @@ class GameScene extends Phaser.Scene {
   }
 
   // 진행도(0~1)에 따라 컨베이어 벨트 속도를 점진적으로 증가
-  // 시작 100% → 곡 끝 150% (최대 +50%)
+  // 시작 100% → 곡 끝 160% (최대 +60%)
+  // easeOutQuad 곡선으로 초반부터 가속이 또렷이 체감되도록 함
   _currentSpeed() {
     const progress = Phaser.Math.Clamp((this.songTime || 0) / SONG_DURATION, 0, 1);
-    return NOTE_SPEED * (1 + 0.5 * progress);
+    const eased = 1 - (1 - progress) * (1 - progress); // easeOutQuad
+    return NOTE_SPEED * (1 + 0.6 * eased);
   }
 
   // ─── 메인 루프 ────────────────────────────────
