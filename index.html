@@ -4,7 +4,14 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>챱츄르냥이</title>
-  <link rel="stylesheet" href="https://font.ksthink.com/f/mulmaru.css" />
+  <link rel="preload" href="./mulmaru-subset.woff2" as="font" type="font/woff2" crossorigin />
+  <style>
+    @font-face {
+      font-family: 'mulmaru';
+      src: url('./mulmaru-subset.woff2') format('woff2');
+      font-display: block;
+    }
+  </style>
   <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
   <style>
     /* 게임 시작 전에 폰트 다운로드를 유도하기 위한 숨겨진 프리로드 */
